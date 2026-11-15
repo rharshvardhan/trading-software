@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* Design tokens. Chart and status colors follow the validated dataviz reference palette;
+   up/down candles pass with secondary encoding (hollow vs filled bodies, arrows, labels). */
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-page: #f9f9f7;
+  --color-surface: #fcfcfb;
+  --color-raised: #ffffff;
+  --color-ink: #0b0b0b;
+  --color-ink-2: #52514e;
+  --color-muted: #898781;
+  --color-grid: #e1e0d9;
+  --color-axis: #c3c2b7;
+  --color-hairline: rgb(11 11 11 / 0.1);
+  --color-accent: #2a78d6;
+  --color-up: #1baf7a;
+  --color-down: #e34948;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+}
+
+/* Dark theme: follows the system unless the header toggle chose light or dark (data-theme on <html>). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-page: #0d0d0d;
+    --color-surface: #1a1a19;
+    --color-raised: #222220;
+    --color-ink: #f0efec;
+    --color-ink-2: #c3c2b7;
+    --color-grid: #2c2c2a;
+    --color-axis: #383835;
+    --color-hairline: rgb(255 255 255 / 0.1);
+    --color-accent: #3987e5;
+    --color-up: #199e70;
+    --color-down: #e66767;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-page: #0d0d0d;
+  --color-surface: #1a1a19;
+  --color-raised: #222220;
+  --color-ink: #f0efec;
+  --color-ink-2: #c3c2b7;
+  --color-grid: #2c2c2a;
+  --color-axis: #383835;
+  --color-hairline: rgb(255 255 255 / 0.1);
+  --color-accent: #3987e5;
+  --color-up: #199e70;
+  --color-down: #e66767;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+}

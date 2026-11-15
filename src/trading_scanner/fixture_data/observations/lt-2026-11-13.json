@@ -1,0 +1,29 @@
+{
+  "fixture_format": 1,
+  "kind": "chart_observation",
+  "label": "PARTIAL CHART OBSERVATION: chart-displayed readings from the teaching session, not a provider export. Numeric reconciliation with provider data is pending.",
+  "instrument": {"symbol": "LT", "name": "Larsen & Toubro", "exchange": "NSE", "segment": "cash_equity", "aliases": ["L&T", "Larsen & Toubro"]},
+  "trading_date": "2026-11-13",
+  "timezone": "Asia/Kolkata",
+  "interval_minutes": 5,
+  "as_of": "2026-11-13T15:30:00+05:30",
+  "source": "docs/EXAMPLES.md section 3 (chart readings)",
+  "user_label": "setup rejection example (user-designated): does not qualify",
+  "notes": [
+    "Only highs and lows were read for these candles, so no complete OHLC candle is available; nothing is filled in.",
+    "as_of is the session close because the chart was read after the session; the exact reading time was not recorded."
+  ],
+  "partial_readings": [
+    {"candle": "10:30", "high": "4174.90", "low": "4162.60"},
+    {"candle": "10:35", "high": "4176.70", "low": "4168.60"},
+    {"candle": "10:40", "high": "4178.60", "low": "4169.20"},
+    {"candle": "10:45", "high": "4184.70", "low": "4176.10"},
+    {"candle": "09:50", "high": "4193.60"},
+    {"candle": "09:20", "low": "4127.60"}
+  ],
+  "expected": {
+    "teaching": {"qualifies": false, "state": "not_qualified", "reference_low": "4162.60", "reference_high": "4184.70", "earlier_high": "4193.60", "earlier_high_candle": "09:50", "earlier_low": "4127.60", "earlier_low_candle": "09:20"},
+    "full_scan_until_complete_data": "invalid_data"
+  },
+  "candles": []
+}

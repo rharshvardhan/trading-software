@@ -1,0 +1,33 @@
+{
+  "fixture_format": 1,
+  "kind": "chart_observation",
+  "label": "PARTIAL CHART OBSERVATION: chart-displayed readings from the teaching session, not a provider export. Numeric reconciliation with provider data is pending.",
+  "instrument": {"symbol": "ASIANPAINT", "name": "Asian Paints", "exchange": "NSE", "segment": "cash_equity", "aliases": ["Asian Paints"]},
+  "trading_date": "2026-11-06",
+  "timezone": "Asia/Kolkata",
+  "interval_minutes": 5,
+  "as_of": "2026-11-06T15:30:00+05:30",
+  "source": "docs/EXAMPLES.md section 2 (chart readings)",
+  "user_label": "failure example (user-designated): the model failed after a valid entry; not a qualification failure",
+  "notes": [
+    "Only the 10:30, 10:45, 10:50, and 10:55 candles were read in full; the 10:35 and 10:40 reference candles and the 09:15-10:25 candles were not recorded and are not filled in.",
+    "The drawn lower line was 2500.60 while the inspected 10:45 low displayed 2500.90; this discrepancy is preserved for review.",
+    "The later return above 2514.00 was described by the user but its candles were not recorded.",
+    "as_of is the session close because the chart was read after the session; the exact reading time was not recorded."
+  ],
+  "partial_readings": [
+    {"observation": "marked upper level", "value": "2514.00", "basis": "chart marking; equals the inspected 10:30 high"},
+    {"observation": "drawn lower line", "value": "2500.60", "basis": "hand-drawn line; not a candle value"},
+    {"observation": "morning session high", "candle": "10:30", "value": "2514.00", "basis": "stated in the teaching session"}
+  ],
+  "expected": {
+    "teaching": {"qualifies": true, "state": "entry_identified", "signal": "short", "reference_high": "2514.00", "candidate_reference_lows": ["2500.90", "2500.60"], "breakout": "10:50", "confirmed": "10:55", "entry": "10:55", "entry_price": "2495.70"},
+    "full_scan_until_complete_data": "invalid_data"
+  },
+  "candles": [
+    ["2026-11-06T10:30:00+05:30", "2513.00", "2514.00", "2507.40", "2509.00", null],
+    ["2026-11-06T10:45:00+05:30", "2503.00", "2504.70", "2500.90", "2501.80", null],
+    ["2026-11-06T10:50:00+05:30", "2500.80", "2501.10", "2495.00", "2495.70", null],
+    ["2026-11-06T10:55:00+05:30", "2495.70", "2499.00", "2494.10", "2494.40", null]
+  ]
+}

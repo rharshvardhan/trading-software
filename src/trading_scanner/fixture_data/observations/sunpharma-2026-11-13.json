@@ -1,0 +1,32 @@
+{
+  "fixture_format": 1,
+  "kind": "chart_observation",
+  "label": "PARTIAL CHART OBSERVATION: chart-displayed readings from the teaching session, not a provider export. Numeric reconciliation with provider data is pending.",
+  "instrument": {"symbol": "SUNPHARMA", "name": "Sun Pharma", "exchange": "NSE", "segment": "cash_equity", "aliases": ["Sun Pharma"]},
+  "trading_date": "2026-11-13",
+  "timezone": "Asia/Kolkata",
+  "interval_minutes": 5,
+  "as_of": "2026-11-13T15:30:00+05:30",
+  "source": "docs/EXAMPLES.md section 1 (chart readings)",
+  "user_label": "success example (user-designated)",
+  "notes": [
+    "Only the 10:40-10:55 candles were read in full; the 10:30 and 10:35 reference candles and the 09:15-10:25 candles were not recorded and are not filled in.",
+    "The drawn upper line was 1915.10 while the inspected 10:40 high displayed 1915.00; provider candle values must decide.",
+    "as_of is the session close because the chart was read after the session; the exact reading time was not recorded."
+  ],
+  "partial_readings": [
+    {"observation": "four-candle range", "low": "1910.00", "high": "1915.00", "basis": "observed range of the reference group on the chart"},
+    {"observation": "drawn upper horizontal line", "value": "1915.10", "basis": "hand-drawn line; not a candle value"},
+    {"observation": "morning session high", "candle": "10:40", "value": "1915.00", "basis": "stated in the teaching session"}
+  ],
+  "expected": {
+    "teaching": {"qualifies": true, "state": "entry_identified", "signal": "short", "reference_low": "1910.00", "reference_high": "1915.00", "breakout": "10:50", "confirmed": "10:55", "entry": "10:55", "entry_price": "1906.60"},
+    "full_scan_until_complete_data": "invalid_data"
+  },
+  "candles": [
+    ["2026-11-13T10:40:00+05:30", "1910.50", "1915.00", "1910.00", "1913.00", null],
+    ["2026-11-13T10:45:00+05:30", "1912.90", "1913.60", "1910.20", "1911.00", null],
+    ["2026-11-13T10:50:00+05:30", "1910.30", "1911.70", "1906.50", "1906.50", null],
+    ["2026-11-13T10:55:00+05:30", "1906.60", "1907.40", "1901.40", "1901.40", null]
+  ]
+}

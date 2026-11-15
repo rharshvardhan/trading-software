@@ -1,0 +1,33 @@
+{
+  "fixture_format": 1,
+  "kind": "chart_observation",
+  "label": "PARTIAL CHART OBSERVATION: chart-displayed readings from the teaching session, not a provider export. Numeric reconciliation with provider data is pending.",
+  "instrument": {"symbol": "HCLTECH", "name": "HCL Technologies", "exchange": "NSE", "segment": "cash_equity", "aliases": ["HCL Technologies"]},
+  "trading_date": "2026-11-13",
+  "timezone": "Asia/Kolkata",
+  "interval_minutes": 5,
+  "as_of": "2026-11-13T15:30:00+05:30",
+  "source": "docs/EXAMPLES.md section 4 (chart readings confirmed by the user)",
+  "user_label": "confirmed entry-timing example",
+  "notes": [
+    "Only the 10:30-11:05 candles were read from the chart; 09:15-10:25 and later candles were not recorded and are not filled in.",
+    "as_of is the session close because the chart was read after the session; the exact reading time was not recorded."
+  ],
+  "partial_readings": [
+    {"observation": "morning session high", "candle": "10:35", "value": "1396.70", "basis": "stated in the teaching session; the 09:15-10:25 candles needed to verify it were not recorded"}
+  ],
+  "expected": {
+    "teaching": {"qualifies": true, "state": "entry_identified", "signal": "short", "reference_low": "1390.60", "reference_high": "1396.70", "breakout": "11:00", "confirmed": "11:05", "entry": "11:05", "entry_price": "1384.90"},
+    "full_scan_until_complete_data": "invalid_data"
+  },
+  "candles": [
+    ["2026-11-13T10:30:00+05:30", "1390.80", "1394.20", "1390.60", "1393.90", null],
+    ["2026-11-13T10:35:00+05:30", "1394.30", "1396.70", "1394.30", "1395.20", null],
+    ["2026-11-13T10:40:00+05:30", "1395.40", "1396.00", "1393.00", "1394.00", null],
+    ["2026-11-13T10:45:00+05:30", "1393.80", "1394.70", "1393.00", "1394.60", null],
+    ["2026-11-13T10:50:00+05:30", "1394.00", "1394.40", "1391.60", "1393.70", null],
+    ["2026-11-13T10:55:00+05:30", "1393.70", "1394.30", "1391.20", "1391.20", null],
+    ["2026-11-13T11:00:00+05:30", "1391.10", "1391.10", "1384.60", "1385.00", null],
+    ["2026-11-13T11:05:00+05:30", "1384.90", "1385.00", "1383.20", "1383.80", null]
+  ]
+}

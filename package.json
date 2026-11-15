@@ -1,0 +1,10 @@
+{
+  "name": "four-candle-scanner",
+  "private": true,
+  "packageManager": "pnpm@11.18.0",
+  "scripts": {
+    "dev": "pnpm -C frontend dev",
+    "build": "pnpm -C frontend build",
+    "ui:install": "pnpm -C frontend install"
+  }
+}
