@@ -13,13 +13,13 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from helpers import FIXED_NOW, fixed_clock, make_service
+from helpers import FIXED_NOW, fixed_clock, in_window, make_service
 from trading_scanner.config import Settings
 from trading_scanner.market import IST
 from trading_scanner.models import ResultState, ScanRequest
 from trading_scanner.providers import ProviderError, SymbolResolutionError
 from trading_scanner.providers.dhan import INTRADAY_URL, SCRIP_MASTER_URL, DhanProvider, InstrumentIndex
-from trading_scanner.synthetic import SyntheticSession
+from trading_scanner.synthetic import SyntheticSession, low_qualified
 
 CLIENT_ID = "cid-test-123"
 TOKEN = "tok-secret-xyz"
@@ -47,7 +47,7 @@ CSV = "\n".join([
 
 
 def long_session() -> SyntheticSession:
-    return SyntheticSession().set("11:15", "108.00", "111.50", "107.80", "111.00").set(
+    return low_qualified().set("11:15", "108.00", "111.50", "107.80", "111.00").set(
         "11:20", "111.20", "111.90", "110.60", "111.40"
     )
 
@@ -114,7 +114,8 @@ def make_provider(tmp_path, fake, configured=True, clock=fixed_clock, sleeps=Non
 def scan_one(provider, stock="HCLTECH", day="2026-11-13", clock=fixed_clock):
     service = make_service(lambda name: provider)
     service._clock = clock
-    return service.scan(ScanRequest(trading_date=day, stocks=[stock], provider="dhan")).results[0]
+    (result,) = in_window(service.scan(ScanRequest(trading_date=day, stocks=[stock], provider="dhan")).results)
+    return result  # the original 10:30 window; every scan also reports the other windows
 
 
 # ------------------------------------------------------------- instruments
@@ -196,7 +197,7 @@ def test_missing_late_candles_prevent_a_no_breakout_claim(tmp_path):
 
 
 def test_unquoted_prices_keep_exact_decimal_precision(tmp_path):
-    session = SyntheticSession().set("11:15", "108.00", "111.50", "107.80", "111.00").set(
+    session = low_qualified().set("11:15", "108.00", "111.50", "107.80", "111.00").set(
         "11:20", "110.90", "111.90", "110.60", "111.40"
     )
     payload = dhan_json(session, close_override={"11:15": "110.000000000000001"})

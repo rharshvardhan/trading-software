@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from helpers import fixed_clock, make_service, write_fixture
+from helpers import fixed_clock, in_window, make_service, write_fixture
 from trading_scanner.config import PACKAGED_FIXTURE_DIR, Settings
 from trading_scanner.models import ResultState, ScanRequest
 from trading_scanner.providers import (
@@ -105,10 +105,10 @@ def test_committed_synthetic_fixtures_match_the_generator():
 
 @pytest.mark.parametrize("scenario", demo_scenarios(), ids=lambda s: s.symbol)
 def test_every_synthetic_demo_fixture_produces_its_documented_result(scenario):
-    result = make_service().scan(
-        ScanRequest(trading_date="2026-11-13", stocks=[scenario.symbol], provider="fixture")
-    ).results[0]
+    response = make_service().scan(ScanRequest(trading_date="2026-11-13", stocks=[scenario.symbol], provider="fixture"))
+    (result,) = [r for r in response.results if r.strategy_window == scenario.window]
     expected = scenario.expected
+    assert result.strategy_window == scenario.window
     assert result.state.value == expected["state"]
     assert result.data.synthetic is True and result.instrument.synthetic is True
     if "signal" in expected:
@@ -125,6 +125,9 @@ def test_every_synthetic_demo_fixture_produces_its_documented_result(scenario):
         assert result.rule_decision.code.value == expected["rule_decision"]
     if "missing" in expected:
         assert result.data.missing_candles == expected["missing"]
+    if "cancelled" in expected:
+        assert result.cancellation.candle_start.strftime("%H:%M") == expected["cancelled"]
+        assert result.breakout is None and result.entry is None
 
 
 def test_blank_environment_values_mean_unset(tmp_path, monkeypatch):
@@ -136,9 +139,9 @@ def test_blank_environment_values_mean_unset(tmp_path, monkeypatch):
 
 
 def test_unquoted_fixture_numbers_are_parsed_without_float_drift(tmp_path):
-    from trading_scanner.synthetic import SyntheticSession
+    from trading_scanner.synthetic import low_qualified
 
-    session = SyntheticSession().set("11:15", "108.00", "111.50", "107.80", "__CLOSE__").set(
+    session = low_qualified().set("11:15", "108.00", "111.50", "107.80", "__CLOSE__").set(
         "11:20", "__OPEN__", "111.90", "110.60", "111.40"
     )
     document = base_document(candles=session.json_rows())
@@ -146,9 +149,9 @@ def test_unquoted_fixture_numbers_are_parsed_without_float_drift(tmp_path):
     text = text.replace('"__CLOSE__"', "110.000000000000001").replace('"__OPEN__"', "110.90")
     (tmp_path / "f.json").write_text(text)
     provider = FixtureProvider(tmp_path)
-    result = make_service(lambda name: provider).scan(
+    (result,) = in_window(make_service(lambda name: provider).scan(
         ScanRequest(trading_date="2026-11-13", stocks=["SYN-A"], provider="fixture")
-    ).results[0]
+    ).results)
     # As a binary float this close would equal 110.0 and fall on the boundary; as a decimal it is outside.
     assert result.state is ResultState.ENTRY_IDENTIFIED
     assert str(result.breakout.close) == "110.000000000000001" and str(result.entry.price) == "110.90"

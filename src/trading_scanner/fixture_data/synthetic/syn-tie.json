@@ -18,7 +18,8 @@
   ],
   "expected": {
     "state": "needs_rule_decision",
-    "rule_decision": "equal_repeated_extreme"
+    "rule_decision": "equal_repeated_extreme",
+    "strategy_window": "1030_four_candle"
   },
   "candles": [
     [

@@ -17,7 +17,8 @@
     "Snapshot at 10:42; the 10:40 candle is still forming and 10:45 has not started."
   ],
   "expected": {
-    "state": "waiting_for_reference"
+    "state": "waiting_for_reference",
+    "strategy_window": "1030_four_candle"
   },
   "candles": [
     [

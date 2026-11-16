@@ -29,10 +29,12 @@ class ResultState(StrEnum):
     NOT_QUALIFIED = "not_qualified"
     NEEDS_RULE_DECISION = "needs_rule_decision"
     WAITING_FOR_BREAKOUT = "waiting_for_breakout"
+    WAITING_FOR_CONFIRMATION = "waiting_for_confirmation"
     NO_BREAKOUT = "no_breakout"
     AWAITING_ENTRY = "awaiting_entry"
     ENTRY_IDENTIFIED = "entry_identified"
     ENTRY_UNAVAILABLE_SESSION_END = "entry_unavailable_session_end"
+    SETUP_CANCELLED = "setup_cancelled"
     NO_SESSION = "no_session"
     SYMBOL_ERROR = "symbol_error"
     PROVIDER_ERROR = "provider_error"
@@ -67,6 +69,8 @@ class RuleDecisionCode(StrEnum):
 
     EQUAL_REPEATED_EXTREME = "equal_repeated_extreme"
     GAP_BEYOND_RANGE = "gap_beyond_range"
+    BOTH_SIDES_QUALIFIED = "both_sides_qualified"
+    ENTRY_OPEN_CANCELLATION = "entry_open_cancellation"
 
 
 # ------------------------------------------------------------------ value parsing
@@ -236,6 +240,7 @@ class ProviderCandles:
 
 StockName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 ProviderName = Literal["fixture", "dhan"]
+StrategyWindow = Literal["0945_three_candle", "1030_four_candle", "1050_two_candle"]
 MAX_STOCKS = 100
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -316,9 +321,18 @@ class SideEvidence(BaseModel):
     earlier_candles: list[str]
 
 
+class WindowOut(BaseModel):
+    key: str
+    label: str
+    reference_candles: list[str]
+    earlier_window: str
+    qualification_window: str
+    range_final_at: str
+
+
 class QualificationOut(BaseModel):
     decision: QualificationDecision
-    window: str = "09:15-10:45"
+    window: str
     session_high: Decimal
     session_high_candles: list[str]
     session_low: Decimal
@@ -326,6 +340,11 @@ class QualificationOut(BaseModel):
     high_side: SideEvidence
     low_side: SideEvidence
     qualifying_sides: list[Literal["high", "low"]]
+    permitted_signal: Signal | None = Field(
+        default=None,
+        description="The only entry direction this setup allows (REVERSAL_DIRECTION_SPEC.md): "
+        "new morning high -> short, new morning low -> long; null when undecided.",
+    )
 
 
 class ReferenceOut(BaseModel):
@@ -345,7 +364,46 @@ class BreakoutOut(BaseModel):
     close: Decimal
     confirmed_at: datetime
     entirely_beyond_range: bool
+    direction_permitted: bool | None = Field(
+        default=None,
+        description="True for reported breakouts; a close in the prohibited direction is reported as a cancellation.",
+    )
     candle: CandleOut
+
+
+class CancellationOut(BaseModel):
+    """A prohibited pre-entry crossing. The 09:45 window uses wick breaches of the opposite boundary
+    (SHORT: high above the reference high; LONG: low below the reference low); other windows retain
+    close cancellation. Never a stop-loss, exit, or computed loss."""
+
+    side: BreakoutSide
+    boundary_value: Decimal
+    candle_start: datetime
+    candle_end: datetime
+    close: Decimal
+    confirmed_at: datetime | None
+    candle: CandleOut
+    trigger_basis: Literal["close", "high", "low"] = "close"
+    observed_at: datetime | None = None
+
+
+class TriggerOut(BaseModel):
+    """The first permitted price breach, which need not have an outside close."""
+
+    side: BreakoutSide
+    boundary_value: Decimal
+    candle_start: datetime
+    candle_end: datetime
+    extreme_value: Decimal
+    observed_at: datetime
+    candle: CandleOut
+
+
+class ConfirmationOut(BaseModel):
+    earliest_time: datetime
+    candle: CandleOut | None
+    closed: bool
+    satisfies: bool | None
 
 
 class EntryOut(BaseModel):
@@ -363,12 +421,19 @@ class RuleDecisionOut(BaseModel):
 
 
 RISK_RULES_REASON = "Rules not yet defined"
+STOP_LEVEL_REASON = (
+    "Initial stop-loss level per THREE_CANDLE_0945_STOP_LOSS_SPEC.md; stop-hit, target, and exit rules not yet defined"
+)
+NO_ENTRY_STOP_REASON = "No entry, so no stop loss; target and exit rules not yet defined"
+STOP_DISABLED_REASON = "Stop-loss logic is turned off (STOP_LOSS_ENABLED is not true in .env); target and exit rules not yet defined"
 
 
 class RiskOut(BaseModel):
-    """Stop-loss, target, exit, and outcome stay null until the user supplies rules (R10)."""
+    """Risk fields stay null until the user supplies rules (R10). The one taught rule so far is the
+    09:45 window's initial stop-loss level; no stop hit, exit, target, or outcome is ever computed."""
 
     stop_loss: Decimal | None = None
+    stop_loss_basis: str | None = None
     targets: list[Decimal] | None = None
     exit_time: datetime | None = None
     exit_price: Decimal | None = None
@@ -385,6 +450,7 @@ class StockResult(BaseModel):
     timezone: str
     interval: str
     strategy_version: str
+    strategy_window: StrategyWindow
     provider: str
     synthetic: bool
     state: ResultState
@@ -398,6 +464,10 @@ class StockResult(BaseModel):
     breakout: BreakoutOut | None
     entry: EntryOut | None
     risk: RiskOut
+    cancellation: CancellationOut | None = None
+    entry_rule: Literal["single_close", "break_then_confirm"] = "single_close"
+    trigger: TriggerOut | None = None
+    confirmation: ConfirmationOut | None = None
     candles: list[CandleOut] = Field(
         default_factory=list, description="Validated session candles used for the decision (for charts)."
     )
@@ -429,7 +499,11 @@ class ScanResponse(BaseModel):
     provider: str
     scanned_at: datetime
     strategy_version: str
+    windows: list[WindowOut] = Field(
+        description="Every scan evaluates all reference windows; each stock has one result per window."
+    )
     timezone: str
     interval: str
+    stop_loss_enabled: bool = Field(description="Whether the STOP_LOSS_ENABLED switch turned the stop-loss logic on.")
     synthetic_data_present: bool
     results: list[StockResult]

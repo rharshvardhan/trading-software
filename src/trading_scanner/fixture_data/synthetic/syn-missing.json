@@ -20,7 +20,8 @@
     "state": "invalid_data",
     "missing": [
       "10:00"
-    ]
+    ],
+    "strategy_window": "1030_four_candle"
   },
   "candles": [
     [

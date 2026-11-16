@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import json
+import threading
 import time as time_module
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -296,6 +297,10 @@ class DhanProvider(CandleProvider):
         self._monotonic = monotonic
         self._last_request: float | None = None
         self._index: InstrumentIndex | None = None
+        # Live streams and manual scans can call one provider from several threads: serialize requests
+        # (so the throttle holds across them) and load the instrument list only once.
+        self._request_lock = threading.Lock()
+        self._index_lock = threading.Lock()
 
     # ------------------------------------------------------------------ plumbing
 
@@ -356,11 +361,12 @@ class DhanProvider(CandleProvider):
         return path
 
     def _instruments(self) -> InstrumentIndex:
-        if self._index is None:
-            today = self._clock().astimezone(IST).date()
-            with self._ensure_master().open(newline="", encoding="utf-8") as handle:
-                self._index = InstrumentIndex.from_csv(handle, today=today)
-        return self._index
+        with self._index_lock:
+            if self._index is None:
+                today = self._clock().astimezone(IST).date()
+                with self._ensure_master().open(newline="", encoding="utf-8") as handle:
+                    self._index = InstrumentIndex.from_csv(handle, today=today)
+            return self._index
 
     def search(self, query: str, limit: int = 12) -> list[InstrumentSuggestion]:
         """Suggestions from Dhan's public instrument list (no credentials needed)."""
@@ -424,9 +430,10 @@ class DhanProvider(CandleProvider):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        self._throttle()
         try:
-            response = self._http().post(INTRADAY_URL, json=body, headers=headers, timeout=30)
+            with self._request_lock:
+                self._throttle()
+                response = self._http().post(INTRADAY_URL, json=body, headers=headers, timeout=30)
         except httpx.TimeoutException as exc:
             raise ProviderError("Dhan did not respond in time; scan again. " + NOT_SUBSTITUTED) from exc
         except httpx.HTTPError as exc:

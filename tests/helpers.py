@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from trading_scanner.config import PACKAGED_FIXTURE_DIR
-from trading_scanner.market import IST
+from trading_scanner.market import FOUR_CANDLE_1030, IST, ReferenceWindow
 from trading_scanner.models import Candle, Instrument, ProviderCandles, ProviderName, RawCandle
 from trading_scanner.normalize import normalize_candles
 from trading_scanner.providers import CandleProvider, ProviderError, SymbolResolutionError
@@ -25,15 +25,36 @@ def fixed_clock() -> datetime:
     return FIXED_NOW
 
 
-def make_service(provider_factory: Callable[[ProviderName], CandleProvider] | None = None) -> ScanService:
-    return ScanService(provider_factory=provider_factory, clock=fixed_clock)
+def make_service(
+    provider_factory: Callable[[ProviderName], CandleProvider] | None = None, stop_loss_enabled: bool | None = None
+) -> ScanService:
+    """A scan service on the fixed clock. Stop loss follows STOP_LOSS_ENABLED (cleared, so off, in tests)
+    unless ``stop_loss_enabled`` is given."""
+    return ScanService(provider_factory=provider_factory, clock=fixed_clock, stop_loss_enabled=stop_loss_enabled)
 
 
-def evaluate(session: SyntheticSession, at: str = "15:30", through: str | None = None) -> Evaluation:
+WINDOW_0945 = "0945_three_candle"
+WINDOW_1030 = "1030_four_candle"
+WINDOW_1050 = "1050_two_candle"
+ALL_WINDOWS = [WINDOW_0945, WINDOW_1030, WINDOW_1050]  # chronological, the order every scan reports
+
+
+def in_window(results, key: str = WINDOW_1030):
+    """Every scan reports both windows; pick one window's results (works for models or JSON dicts)."""
+    return [r for r in results if (r["strategy_window"] if isinstance(r, dict) else r.strategy_window) == key]
+
+
+def evaluate(
+    session: SyntheticSession,
+    at: str = "15:30",
+    through: str | None = None,
+    window: ReferenceWindow = FOUR_CANDLE_1030,
+    stop_loss_enabled: bool = False,
+) -> Evaluation:
     """Normalize and evaluate a synthetic session as of a market time on its date."""
     normalization = normalize_candles(session.raw_candles(through), session.trading_date, as_of(at, session.trading_date))
     assert normalization.session is not None, normalization.problems
-    return evaluate_session(normalization.session)
+    return evaluate_session(normalization.session, window, stop_loss_enabled=stop_loss_enabled)
 
 
 def load_observation(filename: str) -> FixtureFile:

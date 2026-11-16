@@ -2,7 +2,7 @@
 
 ## Current state
 
-The setup-and-entry scope of [SPEC.md](../SPEC.md) version 0.2.0 is implemented, along with the user-requested Dhan adapter and minimal web UI (section 13). The terminal runner, the FastAPI interface, and the web UI all go through one shared service and one strategy engine. Risk and exit rules are a later milestone.
+The setup-and-entry scope of [SPEC.md](../specs/SPEC.md) version 0.2.0 is implemented, along with the user-requested Dhan adapter and minimal web UI (section 13). The terminal runner, the FastAPI interface, and the web UI all go through one shared service and one strategy engine. The [direction correction](../specs/REVERSAL_DIRECTION_SPEC.md) is implemented (its section 10). Risk and exit rules are a later milestone.
 
 ## Technology
 
@@ -89,6 +89,8 @@ SPEC.md section 13 records the contract, confirmed with a live response on 15 No
 - Instruments come from Dhan's public compact scrip master, downloaded at most once per day into `data/dhan/`, and filtered to NSE cash equities.
 - Candles come from `POST https://api.dhan.co/v2/charts/intraday` with interval 5. Timestamps are epoch seconds marking candle starts.
 - Credentials are read from `.env`. Tokens expire: update `DHAN_ACCESS_TOKEN` and restart the server.
+- `LIVE_REFRESH_SECONDS` in `.env` (default 60, clamped to 15-300) sets the live-update cadence: scans at 09:15:08 and then every N seconds until 15:35, streamed by `GET /v1/scans/stream` (Server-Sent Events). It is read at start-up.
+- `STOP_LOSS_ENABLED` in `.env` switches the 09:45 initial stop-loss logic: only `true` (or `1`, `yes`, `on`) enables it; anything else disables it. It is read at start-up, so restart `pnpm dev` after changing it.
 - Data API requests are spaced at least 0.25 s apart.
 - Dhan's intraday data ends with the 15:10 candle; see SPEC.md U5.
 

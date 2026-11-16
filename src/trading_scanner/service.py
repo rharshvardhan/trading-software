@@ -1,8 +1,10 @@
 """The shared analysis service used by both the terminal runner and FastAPI.
 
-Flow per distinct stock: resolve the instrument, retrieve candles from the explicitly
-selected provider, normalize them, evaluate the strategy, and build a result. A failure
-for one stock never removes the results of the others.
+Flow per distinct stock: resolve the instrument, retrieve candles once from the explicitly
+selected provider, normalize them, then evaluate **every reference window** (09:45 three-candle,
+10:30 four-candle, and 10:50 two-candle) independently. Each stock therefore yields one result
+per window, in chronological window order; results are never combined or ranked across windows. A failure for one
+stock never removes the results of the others.
 """
 
 from __future__ import annotations
@@ -13,14 +15,28 @@ from datetime import date, datetime
 
 from trading_scanner import STRATEGY_VERSION
 from trading_scanner.config import Settings
-from trading_scanner.market import INTERVAL_LABEL, IST, TIMEZONE_NAME, hhmm, ist_now, session_close
+from trading_scanner.market import (
+    INTERVAL_LABEL,
+    IST,
+    TIMEZONE_NAME,
+    WINDOWS,
+    ReferenceWindow,
+    hhmm,
+    ist_now,
+    session_close,
+)
 from trading_scanner.models import (
     BreakoutOut,
+    CancellationOut,
     CandleOut,
+    ConfirmationOut,
     DataCoverage,
     EntryOut,
     Instrument,
     InstrumentSearchResponse,
+    NO_ENTRY_STOP_REASON,
+    STOP_DISABLED_REASON,
+    STOP_LEVEL_REASON,
     ProviderCandles,
     ProviderName,
     QualificationOut,
@@ -32,6 +48,8 @@ from trading_scanner.models import (
     ScanResponse,
     SideEvidence,
     StockResult,
+    TriggerOut,
+    WindowOut,
 )
 from trading_scanner.normalize import normalize_candles
 from trading_scanner.providers import (
@@ -42,7 +60,7 @@ from trading_scanner.providers import (
     build_provider,
 )
 from trading_scanner.providers.base import alias_key
-from trading_scanner.strategy import RULE_QUESTIONS, Evaluation, SideAssessment, evaluate_session
+from trading_scanner.strategy import RULE_QUESTIONS, Evaluation, RangeBreach, SideAssessment, evaluate_session
 
 ENTRY_PRICE_BASIS = (
     "Open of the candle immediately after the breakout candle; a reference price, not an executed fill."
@@ -75,7 +93,7 @@ def unique_names(names: list[str]) -> list[str]:
 class _Entry:
     names: list[str]
     instrument: Instrument | None = None
-    error: StockResult | None = None
+    error: tuple[ResultState, str] | None = None  # stock-level failure, reported for every window
     notes: list[str] = field(default_factory=list)
 
 
@@ -85,11 +103,20 @@ class ScanService:
         provider_factory: Callable[[ProviderName], CandleProvider] | None = None,
         clock: Callable[[], datetime] = ist_now,
         settings: Settings | None = None,
+        stop_loss_enabled: bool | None = None,
     ) -> None:
         self._settings = settings
         self._provider_factory = provider_factory or self._default_factory
         self._clock = clock
         self._providers: dict[str, CandleProvider] = {}
+        # STOP_LOSS_ENABLED in .env (read once at start-up); an explicit argument wins, for tests.
+        self._stop_loss_enabled = (
+            stop_loss_enabled if stop_loss_enabled is not None else (settings or Settings()).stop_loss_enabled
+        )
+
+    @property
+    def stop_loss_enabled(self) -> bool:
+        return self._stop_loss_enabled
 
     def _default_factory(self, name: ProviderName) -> CandleProvider:
         return build_provider(name, self._settings or Settings())
@@ -128,10 +155,10 @@ class ScanService:
             try:
                 instrument = provider.resolve(name)
             except SymbolResolutionError as exc:
-                entries.append(_Entry([name], error=self._error(name, request, ResultState.SYMBOL_ERROR, str(exc))))
+                entries.append(_Entry([name], error=(ResultState.SYMBOL_ERROR, str(exc))))
                 continue
             except ProviderError as exc:
-                entries.append(_Entry([name], error=self._error(name, request, ResultState.PROVIDER_ERROR, str(exc))))
+                entries.append(_Entry([name], error=(ResultState.PROVIDER_ERROR, str(exc))))
                 continue
             existing = by_symbol.get(instrument.symbol)
             if existing is not None:
@@ -144,17 +171,33 @@ class ScanService:
             by_symbol[instrument.symbol] = entry
             entries.append(entry)
 
-        results = [
-            entry.error if entry.error is not None else self._analyze(entry, request, provider)
-            for entry in entries
-        ]
+        windows = tuple(WINDOWS.values())
+        results: list[StockResult] = []
+        for entry in entries:
+            if entry.error is not None:
+                state, reason = entry.error
+                results.extend(self._error(entry.names[0], request, window, state, reason) for window in windows)
+            else:
+                results.extend(self._analyze(entry, request, provider, windows))
         return ScanResponse(
             trading_date=request.trading_date,
             provider=request.provider,
             scanned_at=scanned_at,
             strategy_version=STRATEGY_VERSION,
+            windows=[
+                WindowOut(
+                    key=window.key,
+                    label=window.label,
+                    reference_candles=[hhmm(s) for s in window.reference_slots],
+                    earlier_window=f"{hhmm(window.earlier_slots[0])}-{hhmm(window.earlier_slots[-1])}",
+                    qualification_window=window.qualification_text,
+                    range_final_at=hhmm(window.range_final_at),
+                )
+                for window in windows
+            ],
             timezone=TIMEZONE_NAME,
             interval=INTERVAL_LABEL,
+            stop_loss_enabled=self._stop_loss_enabled,
             synthetic_data_present=any(r.synthetic for r in results),
             results=results,
         )
@@ -162,7 +205,12 @@ class ScanService:
     # ------------------------------------------------------------------ internals
 
     def _base(
-        self, names: list[str], request: ScanRequest, instrument: Instrument | None, synthetic: bool | None = None
+        self,
+        names: list[str],
+        request: ScanRequest,
+        window: ReferenceWindow,
+        instrument: Instrument | None,
+        synthetic: bool | None = None,
     ) -> dict:
         if synthetic is None:
             synthetic = bool(instrument is not None and instrument.synthetic)
@@ -176,6 +224,7 @@ class ScanService:
             "timezone": TIMEZONE_NAME,
             "interval": INTERVAL_LABEL,
             "strategy_version": STRATEGY_VERSION,
+            "strategy_window": window.key,
             "risk": RiskOut(),
         }
 
@@ -183,6 +232,7 @@ class ScanService:
         self,
         name: str,
         request: ScanRequest,
+        window: ReferenceWindow,
         state: ResultState,
         reason: str,
         instrument: Instrument | None = None,
@@ -191,7 +241,7 @@ class ScanService:
         data: DataCoverage | None = None,
     ) -> StockResult:
         return StockResult(
-            **self._base(names or [name], request, instrument, data.synthetic if data else None),
+            **self._base(names or [name], request, window, instrument, data.synthetic if data else None),
             state=state,
             setup_qualified=None,
             reason=reason,
@@ -204,40 +254,49 @@ class ScanService:
             entry=None,
         )
 
-    def _analyze(self, entry: _Entry, request: ScanRequest, provider: CandleProvider) -> StockResult:
+    def _analyze(
+        self, entry: _Entry, request: ScanRequest, provider: CandleProvider, windows: tuple[ReferenceWindow, ...]
+    ) -> list[StockResult]:
+        """Fetch and normalize once, then evaluate each window independently."""
         instrument = entry.instrument
         assert instrument is not None
         name = entry.names[0]
+
+        def failed(state: ResultState, reason: str, data: DataCoverage | None = None) -> list[StockResult]:
+            return [
+                self._error(name, request, window, state, reason, instrument, entry.names, entry.notes, data)
+                for window in windows
+            ]
+
         try:
             response = provider.fetch_candles(instrument, request.trading_date)
         except NoSessionError as exc:
-            return self._error(name, request, ResultState.NO_SESSION, str(exc), instrument, entry.names, entry.notes)
+            return failed(ResultState.NO_SESSION, str(exc))
         except ProviderError as exc:
-            return self._error(
-                name, request, ResultState.PROVIDER_ERROR, str(exc), instrument, entry.names, entry.notes
-            )
+            return failed(ResultState.PROVIDER_ERROR, str(exc))
         retrieved_at = self.now()
 
         normalization = normalize_candles(response.candles, request.trading_date, response.as_of)
         if normalization.session is None:
             data = self._coverage(provider.name, response, retrieved_at, normalization.notes, None, 0, [])
             reason = "Candle data is contradictory, so no decision can be made: " + " ".join(normalization.problems)
-            return self._error(
-                name, request, ResultState.INVALID_DATA, reason, instrument, entry.names, entry.notes, data
-            )
+            return failed(ResultState.INVALID_DATA, reason, data)
 
-        evaluation = evaluate_session(normalization.session)
-        data = self._coverage(
-            provider.name,
-            response,
-            retrieved_at,
-            normalization.notes,
-            evaluation,
-            len(normalization.session.candles),
-            [hhmm(s) for s in evaluation.missing_slots],
-        )
         candles = [CandleOut.from_candle(c) for c in normalization.session.candles.values()]
-        return self._from_evaluation(entry, request, evaluation, data, candles)
+        results = []
+        for window in windows:
+            evaluation = evaluate_session(normalization.session, window, stop_loss_enabled=self._stop_loss_enabled)
+            data = self._coverage(
+                provider.name,
+                response,
+                retrieved_at,
+                normalization.notes,
+                evaluation,
+                len(normalization.session.candles),
+                [hhmm(s) for s in evaluation.missing_slots],
+            )
+            results.append(self._from_evaluation(entry, request, window, evaluation, data, candles))
+        return results
 
     def _coverage(
         self,
@@ -286,6 +345,7 @@ class ScanService:
         self,
         entry: _Entry,
         request: ScanRequest,
+        window: ReferenceWindow,
         evaluation: Evaluation,
         data: DataCoverage,
         candles: list[CandleOut],
@@ -295,6 +355,7 @@ class ScanService:
         if q is not None:
             qualification = QualificationOut(
                 decision=q.decision,
+                window=window.qualification_text,
                 session_high=q.session_high,
                 session_high_candles=[hhmm(s) for s in q.session_high_slots],
                 session_low=q.session_low,
@@ -302,6 +363,7 @@ class ScanService:
                 high_side=self._side(q.high),
                 low_side=self._side(q.low),
                 qualifying_sides=q.qualifying_sides,
+                permitted_signal=q.permitted_signal,
             )
             reference = ReferenceOut(
                 candles=[CandleOut.from_candle(c) for c in evaluation.reference_candles],
@@ -321,6 +383,7 @@ class ScanService:
                 close=b.candle.close,
                 confirmed_at=b.confirmed_at,
                 entirely_beyond_range=b.entirely_beyond,
+                direction_permitted=b.permitted,
                 candle=CandleOut.from_candle(b.candle),
             )
         if evaluation.entry is not None:
@@ -331,15 +394,61 @@ class ScanService:
                 expected_time=e.expected_start,
                 time=e.candle.start if e.candle is not None else None,
                 price=e.price,
-                price_basis=ENTRY_PRICE_BASIS,
+                price_basis=(
+                    "Open of the candle immediately after the confirmation candle; a reference price, not an executed fill."
+                    if evaluation.trigger is not None else ENTRY_PRICE_BASIS
+                ),
+            )
+        cancellation = None
+        if evaluation.cancellation is not None:
+            k = evaluation.cancellation
+            cancellation = CancellationOut(
+                side=k.side,
+                boundary_value=k.boundary_value,
+                candle_start=k.candle.start,
+                candle_end=k.candle.end,
+                close=k.candle.close,
+                confirmed_at=k.confirmed_at,
+                candle=CandleOut.from_candle(k.candle),
+                trigger_basis=("high" if k.side.value == "above" else "low") if isinstance(k, RangeBreach) else "close",
+                observed_at=k.observed_at if isinstance(k, RangeBreach) else None,
+            )
+        trigger = None
+        if evaluation.trigger is not None:
+            t = evaluation.trigger
+            trigger = TriggerOut(
+                side=t.side,
+                boundary_value=t.boundary_value,
+                candle_start=t.candle.start,
+                candle_end=t.candle.end,
+                extreme_value=t.extreme_value,
+                observed_at=t.observed_at,
+                candle=CandleOut.from_candle(t.candle),
+            )
+        confirmation = None
+        if evaluation.confirmation is not None:
+            c = evaluation.confirmation
+            confirmation = ConfirmationOut(
+                earliest_time=c.earliest_start,
+                candle=CandleOut.from_candle(c.candle) if c.candle is not None else None,
+                closed=c.closed,
+                satisfies=c.satisfies,
             )
         rule = (
             RuleDecisionOut(code=evaluation.rule_decision, question=RULE_QUESTIONS[evaluation.rule_decision])
             if evaluation.rule_decision is not None
             else None
         )
+        if evaluation.stop_loss is not None:
+            risk = RiskOut(stop_loss=evaluation.stop_loss, stop_loss_basis=evaluation.stop_loss_basis, reason=STOP_LEVEL_REASON)
+        elif window.initial_stop_rule is not None and not self._stop_loss_enabled:
+            risk = RiskOut(reason=STOP_DISABLED_REASON)
+        elif window.initial_stop_rule is not None:
+            risk = RiskOut(reason=NO_ENTRY_STOP_REASON)
+        else:
+            risk = RiskOut()
         return StockResult(
-            **self._base(entry.names, request, entry.instrument, data.synthetic),
+            **{**self._base(entry.names, request, window, entry.instrument, data.synthetic), "risk": risk},
             state=evaluation.state,
             setup_qualified=evaluation.setup_qualified,
             reason=evaluation.reason,
@@ -350,5 +459,9 @@ class ScanService:
             reference=reference,
             breakout=breakout,
             entry=entry_out,
+            cancellation=cancellation,
+            entry_rule=window.entry_rule if q is not None and q.permitted_signal is not None else "single_close",
+            trigger=trigger,
+            confirmation=confirmation,
             candles=candles,
         )

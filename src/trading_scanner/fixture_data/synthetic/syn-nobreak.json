@@ -17,7 +17,8 @@
     "A24: the session qualifies, but every later close stays inside or on the range, including a wick to 111.00 at 12:30 and a close exactly on 100.00 at 14:00."
   ],
   "expected": {
-    "state": "no_breakout"
+    "state": "no_breakout",
+    "strategy_window": "1030_four_candle"
   },
   "candles": [
     [

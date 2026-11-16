@@ -30,14 +30,25 @@ function niceTicks(min, max, count = 4) {
   return ticks;
 }
 
-export default function CandleChart({ result }) {
+const labelSlot = (hhmmText) => {
+  const [h, m] = hhmmText.split(":").map(Number);
+  return (h * 60 + m - (9 * 60 + 15)) / 5;
+};
+
+export default function CandleChart({ result, window }) {
   const [hover, setHover] = useState(null);
+  const refCandles = window?.reference_candles ?? ["10:30", "10:35", "10:40", "10:45"];
+  const refStart = labelSlot(refCandles[0]);
+  const refCount = refCandles.length;
   const candles = result.candles;
   if (!candles?.length) return null;
 
   const ref = result.reference;
-  const breakout = result.breakout;
+  // The chart marks the candle that confirmed a breakout, or the one that cancelled the setup.
+  const breakout = result.breakout ?? result.cancellation;
+  const cancelled = !result.breakout && Boolean(result.cancellation);
   const entry = result.entry?.time ? result.entry : null;
+  const trigger = result.trigger;
 
   let lo = Math.min(...candles.map((c) => Number(c.low)));
   let hi = Math.max(...candles.map((c) => Number(c.high)));
@@ -60,13 +71,18 @@ export default function CandleChart({ result }) {
   };
 
   const entryX = entry ? xOf(slotOf(entry.time)) : 0;
+  const stop = result.risk?.stop_loss ?? null;
+  const stopFromX = entry ? entryX : breakout && !cancelled ? edgeOf(slotOf(breakout.candle_end)) : null;
   const entryLabelLeft = entryX > W - 150;
   const breakoutX = breakout ? xOf(slotOf(breakout.candle_start)) : 0;
   const breakoutBelow = breakout?.side === "below";
 
   const summary = [
     ref && `Reference range ${price(ref.low)} to ${price(ref.high)}`,
-    breakout && `breakout candle ${hhmm(breakout.candle_start)} closed ${breakout.side} the range`,
+    trigger && `first break ${hhmm(trigger.candle_start)} ${trigger.side} the range`,
+    breakout && (cancelled && breakout.trigger_basis && breakout.trigger_basis !== "close"
+      ? `cancelled by ${hhmm(breakout.candle_start)} candle ${breakout.trigger_basis} breach`
+      : `${trigger ? "confirmation" : "breakout"} candle ${hhmm(breakout.candle_start)} closed ${breakout.side} the range`),
     entry && `entry at ${hhmm(entry.time)} open ${inr(entry.price)}`,
   ].filter(Boolean).join(", ");
 
@@ -94,16 +110,15 @@ export default function CandleChart({ result }) {
         })}
 
         {/* reference window 10:30-10:50 */}
-        <rect x={edgeOf(15)} y={M.top} width={STEP * 4} height={PH} fill="var(--color-ink)" fillOpacity="0.05" />
-        <text x={edgeOf(17)} y={M.top - 8} textAnchor="middle" fontSize="10" fill="var(--color-ink-2)">Reference</text>
+        <rect x={edgeOf(refStart)} y={M.top} width={STEP * refCount} height={PH} fill="var(--color-ink)" fillOpacity="0.05" />
 
         {/* fixed range band */}
         {ref && (
           <g>
-            <rect x={edgeOf(15)} y={yOf(ref.high)} width={Math.max(STEP * 4, edgeOf(bandEnd) - edgeOf(15))}
+            <rect x={edgeOf(refStart)} y={yOf(ref.high)} width={Math.max(STEP * refCount, edgeOf(bandEnd) - edgeOf(refStart))}
               height={Math.max(1, yOf(ref.low) - yOf(ref.high))} fill="var(--color-accent)" fillOpacity="0.1" />
             {[ref.high, ref.low].map((level) => (
-              <line key={level} x1={edgeOf(15)} x2={Math.max(edgeOf(19), edgeOf(bandEnd))} y1={yOf(level)} y2={yOf(level)}
+              <line key={level} x1={edgeOf(refStart)} x2={Math.max(edgeOf(refStart + refCount), edgeOf(bandEnd))} y1={yOf(level)} y2={yOf(level)}
                 stroke="var(--color-accent)" strokeWidth="1" />
             ))}
           </g>
@@ -133,9 +148,20 @@ export default function CandleChart({ result }) {
                 ? `M${breakoutX - 4} ${yOf(breakout.candle.low) + 6} h8 l-4 6 z`
                 : `M${breakoutX - 4} ${yOf(breakout.candle.high) - 6} h8 l-4 -6 z`}
               fill="var(--color-ink-2)" />
-            <text x={breakoutX} y={breakoutBelow ? yOf(breakout.candle.low) + 24 : yOf(breakout.candle.high) - 16}
+            <text x={breakoutX} y={breakoutBelow ? Math.min(H - 32, yOf(breakout.candle.low) + 24) : Math.max(12, yOf(breakout.candle.high) - 16)}
               textAnchor="middle" fontSize="10" fill="var(--color-ink-2)" {...HALO}>
-              Breakout {hhmm(breakout.candle_start)}
+              {cancelled ? "Cancelled" : trigger ? "Confirmed" : "Breakout"} {hhmm(breakout.candle_start)}
+            </text>
+          </g>
+        )}
+
+        {trigger && (
+          <g>
+            <circle cx={xOf(slotOf(trigger.candle_start))} cy={yOf(trigger.extreme_value)} r="3.5" fill="var(--color-accent)" />
+            <text x={xOf(slotOf(trigger.candle_start))}
+              y={trigger.side === "above" ? Math.max(12, yOf(trigger.extreme_value) - 12) : Math.min(H - 30, yOf(trigger.extreme_value) + 20)}
+              textAnchor="middle" fontSize="10" fill="var(--color-accent)" {...HALO}>
+              First break {hhmm(trigger.candle_start)}
             </text>
           </g>
         )}
@@ -148,6 +174,18 @@ export default function CandleChart({ result }) {
             <text x={entryLabelLeft ? entryX - 10 : entryX + 10} y={yOf(entry.price)} dy="0.32em"
               textAnchor={entryLabelLeft ? "end" : "start"} fontSize="11" fontWeight="600" fill="var(--color-ink)" {...HALO}>
               Entry {inr(entry.price)}
+            </text>
+          </g>
+        )}
+
+        {/* initial stop-loss level (09:45 window): drawn from the entry onward; no stop hit is computed */}
+        {stop && stopFromX !== null && (
+          <g>
+            <line x1={stopFromX} x2={W - M.right} y1={yOf(stop)} y2={yOf(stop)} stroke="var(--color-ink-2)"
+              strokeWidth="1.25" strokeDasharray="5 4" />
+            <text x={W - M.right} y={yOf(stop) - 5} textAnchor="end" fontSize="10.5" fontWeight="600"
+              fill="var(--color-ink)" {...HALO}>
+              Stop {inr(stop)}
             </text>
           </g>
         )}
@@ -179,8 +217,10 @@ export default function CandleChart({ result }) {
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-2">
         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2 border border-up bg-surface" />Up candle (hollow)</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2 bg-down" />Down candle (filled)</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 bg-ink/10" />Reference window ({refCandles[0]}–{refCandles[refCount - 1]})</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 border-y border-accent bg-accent/10" />Fixed range</span>
         {entry && <span className="inline-flex items-center gap-1.5"><span className={`inline-block size-2 rounded-full ${entry.signal === "long" ? "bg-up" : "bg-down"}`} />Entry (next candle open)</span>}
+        {stop && <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 border-t-[1.5px] border-dashed border-ink-2" />Initial stop loss</span>}
       </div>
     </div>
   );

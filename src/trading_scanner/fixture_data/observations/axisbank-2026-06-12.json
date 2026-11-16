@@ -1,0 +1,33 @@
+{
+  "fixture_format": 1,
+  "kind": "chart_observation",
+  "label": "PARTIAL OBSERVATION: Dhan values displayed in the scanner app on 15 Nov 2026 and recorded in specs/REVERSAL_DIRECTION_SPEC.md section 6; not a complete provider export.",
+  "instrument": {"symbol": "AXISBANK", "name": "Axis Bank", "exchange": "NSE", "segment": "cash_equity", "aliases": ["Axis Bank"]},
+  "trading_date": "2026-06-12",
+  "timezone": "Asia/Kolkata",
+  "interval_minutes": 5,
+  "as_of": "2026-06-12T15:30:00+05:30",
+  "source": "specs/REVERSAL_DIRECTION_SPEC.md section 6 (direction example DIR-13)",
+  "notes": [
+    "Only the 10:30-11:00 candles were recorded in full; the 09:15-10:25 candles are summarized by their recorded extremes and are not filled in.",
+    "No profit, stop-out, or success/failure label has been established for this example.",
+    "as_of is the session close because the values were read after the session; the exact reading time was not recorded."
+  ],
+  "partial_readings": [
+    {"candle": "10:15", "low": "1321.30", "basis": "lowest low of the 09:15-10:25 candles"},
+    {"observation": "highest high of the 09:15-10:25 candles", "value": "1334.00", "basis": "candle time not recorded"}
+  ],
+  "expected": {
+    "teaching": {"qualifies": true, "qualifying_side": "low", "state": "entry_identified", "signal": "long", "reference_low": "1318.50", "reference_high": "1323.80", "breakout": "10:55", "confirmed": "11:00", "entry": "11:00", "entry_price": "1324.50"},
+    "full_scan_until_complete_data": "invalid_data"
+  },
+  "candles": [
+    ["2026-06-12T10:30:00+05:30", "1322.60", "1323.80", "1322.00", "1322.70", null],
+    ["2026-06-12T10:35:00+05:30", "1322.70", "1323.10", "1321.10", "1322.00", null],
+    ["2026-06-12T10:40:00+05:30", "1322.00", "1322.30", "1318.70", "1320.00", null],
+    ["2026-06-12T10:45:00+05:30", "1320.00", "1320.50", "1318.50", "1319.90", null],
+    ["2026-06-12T10:50:00+05:30", "1319.90", "1322.80", "1318.60", "1322.00", null],
+    ["2026-06-12T10:55:00+05:30", "1322.00", "1324.60", "1322.00", "1324.50", null],
+    ["2026-06-12T11:00:00+05:30", "1324.50", "1324.80", "1323.00", "1323.40", null]
+  ]
+}

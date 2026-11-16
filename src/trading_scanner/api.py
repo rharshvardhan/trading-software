@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from trading_scanner import STRATEGY_VERSION
 from trading_scanner.config import Settings
+from trading_scanner.live import live_scan_events
 from trading_scanner.models import InstrumentSearchResponse, ProviderName, ScanRequest, ScanResponse
 from trading_scanner.providers import PROVIDER_NAMES, ProviderError
 from trading_scanner.service import InputError, ScanService
@@ -27,6 +28,7 @@ class HealthResponse(BaseModel):
     strategy_version: str
     providers: list[str]
     dhan_configured: bool
+    stop_loss_enabled: bool
     time: datetime
 
 
@@ -58,6 +60,7 @@ def create_app(service: ScanService | None = None, ui_dir: Path | None = None) -
             strategy_version=STRATEGY_VERSION,
             providers=list(PROVIDER_NAMES),
             dhan_configured=request.app.state.settings.dhan_configured,
+            stop_loss_enabled=svc.stop_loss_enabled,
             time=svc.now(),
         )
 
@@ -74,6 +77,45 @@ def create_app(service: ScanService | None = None, ui_dir: Path | None = None) -
             return svc.search_instruments(provider, query, limit)
         except ProviderError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/v1/scans/stream", response_class=StreamingResponse)
+    async def stream_scans(
+        request: Request,
+        trading_date: str,
+        stocks: str = Query(description="Comma-separated stock names or symbols"),
+        provider: ProviderName = Query(),
+        max_updates: int | None = Query(default=None, ge=1, le=10_000, include_in_schema=False),
+    ) -> StreamingResponse:
+        """Live updates over Server-Sent Events: the same scan as POST /v1/scans, repeated just after every
+        five-minute candle close (and between them) while the trading date is today."""
+        svc: ScanService = request.app.state.service
+        try:
+            body = ScanRequest(
+                trading_date=trading_date, stocks=[s for s in stocks.split(",") if s.strip()], provider=provider
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["query", *map(str, e["loc"])], "msg": e["msg"], "type": e["type"]} for e in exc.errors()],
+            ) from exc
+        try:
+            svc.validate_trading_date(body.trading_date)
+        except InputError as exc:
+            raise HTTPException(
+                status_code=422, detail=[{"type": "value_error", "loc": ["query", exc.field_name], "msg": exc.message}]
+            ) from exc
+        events = live_scan_events(
+            svc,
+            body,
+            refresh_seconds=request.app.state.settings.live_refresh_seconds,
+            is_disconnected=request.is_disconnected,
+            max_updates=max_updates,
+        )
+        return StreamingResponse(
+            events,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/v1/scans", response_model=ScanResponse)
     def create_scan(body: ScanRequest, request: Request) -> ScanResponse:

@@ -4,7 +4,7 @@ from helpers import evaluate, raw
 from trading_scanner.models import RawCandle, ResultState
 from trading_scanner.normalize import normalize_candles
 from trading_scanner.strategy import evaluate_session
-from trading_scanner.synthetic import SyntheticSession, as_of
+from trading_scanner.synthetic import as_of, low_qualified
 
 DAY = date(2026, 11, 13)
 CLOSE = as_of("15:30")
@@ -67,7 +67,7 @@ def test_naive_timestamps_and_as_of_are_rejected():
 
 
 def test_utc_timestamps_evaluate_identically_to_kolkata_timestamps():
-    session = SyntheticSession().set("11:15", "108.00", "111.50", "107.80", "111.00").set(
+    session = low_qualified().set("11:15", "108.00", "111.50", "107.80", "111.00").set(
         "11:20", "111.20", "111.90", "110.60", "111.40"
     )
     utc_rows = [

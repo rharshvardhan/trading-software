@@ -103,11 +103,23 @@ def test_argument_errors_exit_with_usage(argv):
 
 def test_missing_historical_entry_candle_is_labeled_missing_not_pending():
     from helpers import InMemoryProvider
-    from trading_scanner.synthetic import SyntheticSession
+    from trading_scanner.synthetic import low_qualified
 
-    session = SyntheticSession().set("11:15", "108.00", "111.50", "107.80", "111.00").drop("11:20")
+    session = low_qualified().set("11:15", "108.00", "111.50", "107.80", "111.00").drop("11:20")
     provider = InMemoryProvider(sessions={"A15": (session, "15:30", None)})
     out = io.StringIO()
     main(["--provider", "fixture", "--date", "2026-11-13", "--stocks", "A15"],
          service=make_service(lambda name: provider), out=out)
     assert "11:20 missing" in out.getvalue() and "pending" not in out.getvalue()
+
+
+def test_cli_reports_all_windows_for_every_stock():
+    code, text = run(["--provider", "fixture", "--date", "2026-11-13", "--stocks", "SYN-0945-SHORT"])
+    assert code == 0 and "windows: 09:45 three-candle + 10:30 four-candle + 10:50 two-candle" in text
+    assert "09:45 (3)" in text and "10:30 (4)" in text and "10:50 (2)" in text
+    assert "10:30 four-candle window: not_qualified" in text
+    assert "09:45 three-candle window: entry_identified" in text and "₹98.80" in text
+    _, json_text = run(["--provider", "fixture", "--date", "2026-11-13", "--stocks", "SYN-0945-SHORT", "--json"])
+    assert [w["key"] for w in json.loads(json_text)["windows"]] == ["0945_three_candle", "1030_four_candle", "1050_two_candle"]
+    with pytest.raises(SystemExit):
+        run(["--provider", "fixture", "--window", "0945", "--date", "2026-11-13", "--stocks", "SYN-LONG"])

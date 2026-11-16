@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from helpers import load_observation, make_service, observed_candles
+from helpers import in_window, load_observation, make_service, observed_candles
 from trading_scanner.formatting import format_inr
 from trading_scanner.models import (
     BreakoutSide,
@@ -23,10 +23,13 @@ from trading_scanner.models import (
 from trading_scanner.strategy import (
     ReferenceRange,
     classify_close,
+    close_side,
     compare_side,
     decide_qualification,
     entry_from_next_candle,
     find_first_breakout,
+    permits,
+    permitted_signal,
     reference_range,
 )
 
@@ -87,9 +90,9 @@ def test_asian_paints_entry_holds_under_both_candidate_lows(candidate_low):
 def test_asian_paints_failure_label_is_kept_as_a_label_not_an_outcome():
     fixture = load_observation("asianpaint-2026-11-06.json")
     assert "failure example" in fixture.user_label
-    result = make_service().scan(
+    (result,) = in_window(make_service().scan(
         ScanRequest(trading_date="2026-11-06", stocks=["Asian Paints"], provider="fixture")
-    ).results[0]
+    ).results)
     assert result.state is not ResultState.NOT_QUALIFIED  # never relabeled as a setup failure
     assert result.risk.outcome is None and result.risk.profit_loss is None and result.risk.stop_loss is None
     assert result.data.provenance["user_label"] == fixture.user_label
@@ -107,15 +110,59 @@ def test_lt_fails_initial_session_extreme_qualification():
     assert decide_qualification(high, low) is QualificationDecision.NOT_QUALIFIED
 
 
+def test_dir13_axis_bank_low_setup_goes_long_at_the_1100_open():
+    """REVERSAL_DIRECTION_SPEC.md section 6: observed Dhan values, low-side qualification only."""
+    fixture = load_observation("axisbank-2026-06-12.json")
+    c = observed_candles(fixture)
+    rng = reference_range([c["10:30"], c["10:35"], c["10:40"], c["10:45"]])
+    assert (rng.low, rng.high) == (D("1318.50"), D("1323.80"))
+    earlier_low = next(r for r in fixture.partial_readings if r.get("candle") == "10:15")["low"]
+    earlier_high = next(r for r in fixture.partial_readings if "highest high" in r.get("observation", ""))["value"]
+    low = compare_side(rng.low, D(earlier_low), "low")
+    high = compare_side(rng.high, D(earlier_high), "high")
+    assert (high, low) == (ExtremeStatus.NOT_EXTREME, ExtremeStatus.NEW_EXTREME)
+    signal = permitted_signal(high, low)
+    assert signal is Signal.LONG
+
+    assert classify_close(c["10:50"], rng) is None  # 1,322.00 closes inside
+    breakout = find_first_breakout(rng, [c["10:50"], c["10:55"], c["11:00"]])
+    assert breakout.candle.start.strftime("%H:%M") == "10:55" and breakout.side is BreakoutSide.ABOVE
+    assert permits(signal, breakout.side) and breakout.confirmed_at.strftime("%H:%M") == "11:00"
+    entry = entry_from_next_candle(breakout, c["11:00"])
+    assert entry.signal is Signal.LONG and entry.price == D("1324.50")  # its later 1,323.40 close is irrelevant
+
+
+def test_dir12_sun_pharma_high_setup_is_short_only():
+    """REVERSAL_DIRECTION_SPEC.md section 5: new morning high at 10:40 -> SHORT below 1,910.00."""
+    signal = permitted_signal(ExtremeStatus.NEW_EXTREME, ExtremeStatus.NOT_EXTREME)
+    assert signal is Signal.SHORT
+    c = observed_candles(load_observation("sunpharma-2026-11-13.json"))
+    rng = ReferenceRange(high=D("1915.00"), low=D("1910.00"))
+    breakout = find_first_breakout(rng, [c["10:50"], c["10:55"]])
+    assert breakout.side is BreakoutSide.BELOW and permits(signal, breakout.side)
+    assert D("1907.00") < rng.low  # the Dhan-reported 10:50 close also confirms below the range
+    assert not permits(signal, BreakoutSide.ABOVE)  # an upward break of 1,915.00 would not justify a LONG
+
+
+def test_can09_adani_ports_long_setup_cancels_on_the_1055_close():
+    """REVERSAL_DIRECTION_SPEC.md section 11: values supplied by the user (no trading date, so no fixture)."""
+    signal = permitted_signal(ExtremeStatus.NOT_EXTREME, ExtremeStatus.NEW_EXTREME)  # new morning low 1,916.70 at 10:40
+    assert signal is Signal.LONG
+    rng = ReferenceRange(high=D("1920.00"), low=D("1916.70"))
+    side = close_side(D("1916.20"), rng)  # the 10:55 candle's close
+    assert side is BreakoutSide.BELOW and not permits(signal, side)  # wrong direction: the setup is cancelled
+    assert close_side(D("1916.70"), rng) is None  # a close on the low itself would not have cancelled
+
+
 @pytest.mark.parametrize(
     "stock, day, candle_count",
     [("HCL Technologies", "2026-11-13", 8), ("Sun Pharma", "2026-11-13", 4),
-     ("Asian Paints", "2026-11-06", 4), ("L&T", "2026-11-13", 0)],
+     ("Asian Paints", "2026-11-06", 4), ("L&T", "2026-11-13", 0), ("Axis Bank", "2026-06-12", 7)],
 )
 def test_full_scan_of_partial_observations_reports_missing_data_without_fabrication(stock, day, candle_count):
-    result = make_service().scan(ScanRequest(trading_date=day, stocks=[stock], provider="fixture")).results[0]
+    (result,) = in_window(make_service().scan(ScanRequest(trading_date=day, stocks=[stock], provider="fixture")).results)
     assert result.state is ResultState.INVALID_DATA
-    assert result.data.synthetic is False and result.data.data_label.startswith("PARTIAL CHART OBSERVATION")
+    assert result.data.synthetic is False and result.data.data_label.startswith("PARTIAL")
     assert result.data.candles_received == candle_count  # exactly the recorded rows, nothing added
     assert "09:15" in result.data.missing_candles and "No candles were filled in" in result.reason
     assert result.entry is None and result.risk.stop_loss is None
@@ -125,9 +172,11 @@ def test_observation_files_hold_only_values_recorded_in_examples():
     import re
     from pathlib import Path
 
-    examples = (Path(__file__).resolve().parents[1] / "docs" / "EXAMPLES.md").read_text()
-    recorded = {m.replace(",", "") for m in re.findall(r"\d{1,3}(?:,\d{3})*\.\d{2}", examples)}
-    for name in ("hcltech-2026-11-13.json", "sunpharma-2026-11-13.json", "asianpaint-2026-11-06.json", "lt-2026-11-13.json"):
+    specs = Path(__file__).resolve().parents[1] / "specs"
+    text = (specs / "EXAMPLES.md").read_text() + (specs / "REVERSAL_DIRECTION_SPEC.md").read_text()
+    recorded = {m.replace(",", "") for m in re.findall(r"\d{1,3}(?:,\d{3})*\.\d{2}", text)}
+    for name in ("hcltech-2026-11-13.json", "sunpharma-2026-11-13.json", "asianpaint-2026-11-06.json",
+                 "lt-2026-11-13.json", "axisbank-2026-06-12.json"):
         fixture = load_observation(name)
         values = {str(v) for row in fixture.candles for v in row[1:5]}
         values |= {v for r in fixture.partial_readings for k, v in r.items() if k in ("high", "low", "value")}
